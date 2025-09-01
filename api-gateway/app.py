@@ -1,4 +1,4 @@
-# api-gateway/app.py - Düzeltilmiş versiyon
+# api-gateway/app.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
@@ -8,57 +8,69 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
 
-AUTH_SERVICE_URL = os.getenv('AUTH_SERVICE_URL', 'http://localhost:5001')
-USER_SERVICE_URL = os.getenv('USER_SERVICE_URL', 'http://localhost:5002')
-PORT = int(os.getenv('PORT', 5000))
-DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
+# CORS allowlist (virgülle ayır)
+origins = [o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if o.strip()]
+if origins:
+    CORS(app, origins=origins, supports_credentials=True)
+else:
+    CORS(app)
 
-def proxy_request(service_url, path):
-    """Improved proxy function"""
-    url = f"{service_url}/{path}"
-    
-    # Filter out problematic headers
-    headers = {key: value for key, value in request.headers.items() 
-              if key.lower() not in ['host', 'content-length', 'content-encoding']}
-    
+AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://localhost:5001").rstrip("/")
+USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://localhost:5002").rstrip("/")
+
+# ---- Port & Host (IPv6 uyumlu) ----
+PORT = int(os.getenv("PORT", "8000"))
+HOST = os.getenv("HOST", "::")  # IPv6 (dual-stack)
+DEBUG = os.getenv("DEBUG", "False").lower() == "true"
+
+def proxy_request(service_url: str, path: str):
+    url = f"{service_url}/{path.lstrip('/')}"
+    # Problemli header'ları çıkar
+    headers = {k: v for k, v in request.headers.items()
+               if k.lower() not in ("host", "content-length", "content-encoding", "connection")}
+
     try:
-        if request.method == 'GET':
-            response = requests.get(url, headers=headers, params=request.args, timeout=30)
-        elif request.method == 'POST':
-            response = requests.post(url, headers=headers, json=request.get_json(), timeout=30)
-        elif request.method == 'PUT':
-            response = requests.put(url, headers=headers, json=request.get_json(), timeout=30)
-        elif request.method == 'DELETE':
-            response = requests.delete(url, headers=headers, timeout=30)
+        method = request.method.upper()
+        if method == "GET":
+            resp = requests.get(url, headers=headers, params=request.args, timeout=30)
+        elif method == "POST":
+            # hem JSON hem form/body desteği
+            json_body = request.get_json(silent=True)
+            data_body = None if json_body is not None else request.get_data()
+            resp = requests.post(url, headers=headers, json=json_body, data=data_body, timeout=30)
+        elif method == "PUT":
+            json_body = request.get_json(silent=True)
+            data_body = None if json_body is not None else request.get_data()
+            resp = requests.put(url, headers=headers, json=json_body, data=data_body, timeout=30)
+        elif method == "DELETE":
+            resp = requests.delete(url, headers=headers, timeout=30)
         else:
             return jsonify({"error": "Method not allowed"}), 405
 
-        # Handle response
+        # JSON değilse de makul döndür
         try:
-            return response.json(), response.status_code
+            return resp.json(), resp.status_code
         except ValueError:
-            return {"message": "Success"}, response.status_code
-            
+            return resp.text, resp.status_code
     except requests.exceptions.RequestException as e:
-        return {"error": f"Service unavailable: {str(e)}"}, 503
+        return {"error": f"Service unavailable: {e}"}, 503
 
-@app.route('/auth/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
+@app.route("/auth/<path:path>", methods=["GET", "POST", "PUT", "DELETE"])
 def auth_proxy(path):
     return proxy_request(AUTH_SERVICE_URL, path)
 
-@app.route('/users/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
-def user_proxy(path):
+@app.route("/users/<path:path>", methods=["GET", "POST", "PUT", "DELETE"])
+def users_proxy(path):
     return proxy_request(USER_SERVICE_URL, path)
 
-@app.route('/health')
+@app.route("/health")
 def health():
     return jsonify({
         "status": "healthy",
         "service": "api-gateway",
-        "environment": os.getenv('ENV', 'production')
-    })
+        "environment": os.getenv("ENV", "production")
+    }), 200
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=PORT, debug=DEBUG)
+if __name__ == "__main__":
+    app.run(host=HOST, port=PORT, debug=DEBUG)
