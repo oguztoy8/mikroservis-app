@@ -14,7 +14,6 @@ CORS(app)
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "user_db")
 
-# ---- Port & Host (IPv6 uyumlu) ----
 PORT = int(os.getenv("PORT", "8002"))
 HOST = os.getenv("HOST", "::")  # IPv6 (dual-stack)
 
@@ -22,25 +21,24 @@ client = MongoClient(MONGO_URI)
 db = client[MONGO_DB_NAME]
 users_collection = db.user_profiles
 
-# --- helpers -------------------------------------------------
-def to_serializable(user: dict) -> dict:
-    """ObjectId ve datetime alanları JSON'a uygun hale getirir."""
-    if not user:
-        return user
-    user["_id"] = str(user.get("_id"))
-
+# ---- helpers ------------------------------------------------
+def to_serializable(doc: dict) -> dict:
+    """ObjectId ve datetime alanlarını JSON'a çevir."""
+    if not doc:
+        return doc
+    if "_id" in doc:
+        doc["_id"] = str(doc["_id"])
     for fld in ("created_at", "updated_at"):
-        val = user.get(fld)
-        # sadece datetime ise isoformat uygula; string ise dokunma
+        val = doc.get(fld)
         if isinstance(val, datetime):
-            user[fld] = val.isoformat()
-    return user
+            doc[fld] = val.isoformat()
+    return doc
 # -------------------------------------------------------------
 
 @app.route("/create", methods=["POST"])
 def create_user():
     data = request.get_json() or {}
-    # karışıklığı önlemek için ISO string olarak yazıyoruz
+    # Tip karmaşasını önlemek için ISO string yazıyoruz
     data["created_at"] = datetime.utcnow().isoformat()
     user_id = users_collection.insert_one(data).inserted_id
     return jsonify({"id": str(user_id), "message": "User created"}), 201
@@ -59,7 +57,6 @@ def get_user(user_id):
 def update_user(user_id):
     try:
         data = request.get_json() or {}
-        # ISO string olarak yaz
         data["updated_at"] = datetime.utcnow().isoformat()
         result = users_collection.update_one({"_id": ObjectId(user_id)}, {"$set": data})
         if result.modified_count:
