@@ -22,10 +22,26 @@ client = MongoClient(MONGO_URI)
 db = client[MONGO_DB_NAME]
 users_collection = db.user_profiles
 
+# --- helpers -------------------------------------------------
+def to_serializable(user: dict) -> dict:
+    """ObjectId ve datetime alanları JSON'a uygun hale getirir."""
+    if not user:
+        return user
+    user["_id"] = str(user.get("_id"))
+
+    for fld in ("created_at", "updated_at"):
+        val = user.get(fld)
+        # sadece datetime ise isoformat uygula; string ise dokunma
+        if isinstance(val, datetime):
+            user[fld] = val.isoformat()
+    return user
+# -------------------------------------------------------------
+
 @app.route("/create", methods=["POST"])
 def create_user():
     data = request.get_json() or {}
-    data["created_at"] = datetime.utcnow()
+    # karışıklığı önlemek için ISO string olarak yazıyoruz
+    data["created_at"] = datetime.utcnow().isoformat()
     user_id = users_collection.insert_one(data).inserted_id
     return jsonify({"id": str(user_id), "message": "User created"}), 201
 
@@ -34,10 +50,7 @@ def get_user(user_id):
     try:
         user = users_collection.find_one({"_id": ObjectId(user_id)})
         if user:
-            user["_id"] = str(user["_id"])
-            if "created_at" in user:
-                user["created_at"] = user["created_at"].isoformat()
-            return jsonify(user), 200
+            return jsonify(to_serializable(user)), 200
         return jsonify({"error": "User not found"}), 404
     except Exception:
         return jsonify({"error": "Invalid user ID"}), 400
@@ -46,7 +59,8 @@ def get_user(user_id):
 def update_user(user_id):
     try:
         data = request.get_json() or {}
-        data["updated_at"] = datetime.utcnow()
+        # ISO string olarak yaz
+        data["updated_at"] = datetime.utcnow().isoformat()
         result = users_collection.update_one({"_id": ObjectId(user_id)}, {"$set": data})
         if result.modified_count:
             return jsonify({"message": "User updated"}), 200
@@ -66,14 +80,7 @@ def delete_user(user_id):
 
 @app.route("/list", methods=["GET"])
 def list_users():
-    users = []
-    for user in users_collection.find():
-        user["_id"] = str(user["_id"])
-        if "created_at" in user:
-            user["created_at"] = user["created_at"].isoformat()
-        if "updated_at" in user:
-            user["updated_at"] = user["updated_at"].isoformat()
-        users.append(user)
+    users = [to_serializable(u) for u in users_collection.find()]
     return jsonify(users), 200
 
 @app.route("/health")
